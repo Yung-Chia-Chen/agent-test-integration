@@ -1,11 +1,23 @@
 # 🎓 Portainer 部署教學 - 給新手的完整指南
 
+## ⚠️ 重要：部署前必讀
+
+**您的環境特殊情況**：
+- Portainer 部署在 **Amazon EC2**（公網）
+- Ollama 和 RAGFlow 在 **140.134.60.218**（可能是學校/內網）
+- **必須先測試連線** 才能部署！
+
+👉 **請先跳到** [連線測試](#-部署前-連線測試必做) 章節
+
+---
+
 ## 📚 目錄
 1. [什麼是 Portainer？](#什麼是-portainer)
 2. [什麼是 Docker？](#什麼是-docker)
 3. [為什麼需要容器化？](#為什麼需要容器化)
-4. [如何在 Portainer 部署你的專案？](#如何在-portainer-部署你的專案)
-5. [常見問題解答](#常見問題解答)
+4. [🔴 部署前：連線測試（必做）](#-部署前-連線測試必做)
+5. [如何在 Portainer 部署你的專案？](#如何在-portainer-部署你的專案)
+6. [常見問題解答](#常見問題解答)
 
 ---
 
@@ -126,12 +138,111 @@ Portainer 介面
 
 ---
 
+## 🔴 部署前：連線測試（必做）
+
+### 為什麼需要測試？
+
+您的應用程式需要連接到：
+- **Ollama**（圖片識別）：`140.134.60.218:2116`
+- **RAGFlow**（知識庫）：`140.134.60.218:2120`
+
+這兩個服務在內網/學校網路，**Amazon 可能連不到**！
+
+### 測試步驟
+
+#### 方法 1：使用 Portainer Console（推薦）
+
+1. **登入 Portainer**：`https://43.212.245.102:9443`
+
+2. **進入 Console**：
+   - 點擊左側 `Environments`
+   - 選擇您的環境（例如 `local`）
+   - 點擊 `>_ Console`
+
+3. **執行測試命令**：
+   ```bash
+   # 測試 Ollama
+   curl -v --connect-timeout 10 http://140.134.60.218:2116
+   
+   # 測試 RAGFlow
+   curl -v --connect-timeout 10 http://140.134.60.218:2120
+   ```
+
+4. **判斷結果**：
+   - ✅ **成功**：看到 `Connected` 或收到回應
+   - ❌ **失敗**：看到 `Connection timed out` 或 `Connection refused`
+
+#### 方法 2：使用測試容器
+
+在 Portainer 中建立臨時容器測試：
+
+1. 點擊 `Containers` → `+ Add container`
+2. 設定：
+   - Name: `connectivity-test`
+   - Image: `curlimages/curl:latest`
+   - Command: `sh -c "curl -v http://140.134.60.218:2116 && curl -v http://140.134.60.218:2120"`
+3. 點擊 `Deploy`
+4. 查看 Logs 確認結果
+
+### 測試結果處理
+
+#### ✅ 如果測試成功
+恭喜！直接繼續部署，環境變數使用：
+```
+OLLAMA_HOST=140.134.60.218:2116
+RAGFLOW_BASE_URL=http://140.134.60.218:2120
+```
+
+#### ❌ 如果測試失敗
+**您有 3 個選項**：
+
+**選項 A：使用 Ngrok 隧道**（最快，10分鐘）
+在您家裡可以連到 Ollama 的電腦上：
+```bash
+# 安裝 ngrok
+brew install ngrok  # macOS
+# 或從 https://ngrok.com 下載
+
+# 啟動 Ollama 隧道
+ngrok http http://140.134.60.218:2116
+
+# 會得到公網網址，例如：
+# https://abc-123-def.ngrok-free.app
+```
+
+然後環境變數改為：
+```
+OLLAMA_HOST=abc-123-def.ngrok-free.app
+```
+
+**選項 B：在 Amazon 部署 Ollama**（長期方案）
+缺點：需要重新下載模型（約 4-5GB）
+
+**選項 C：修改防火牆規則**
+如果您有 140.134.60.218 伺服器的權限，開放給 Amazon IP
+
+### 測試腳本（可選）
+
+我已經建立了測試腳本 `test_connectivity.sh`，可以自動測試：
+```bash
+# 在 Portainer Console 中執行
+curl -fsSL https://raw.githubusercontent.com/Yung-Chia-Chen/agent-test-integration/main/test_connectivity.sh | bash
+```
+
+---
+
 ## 如何在 Portainer 部署你的專案？
+
+### ⚠️ 重要提醒
+**請先完成上面的連線測試！** 否則部署後可能無法正常運作。
 
 ### 整體流程圖
 
 ```
 ┌──────────────────────────────────────────────────┐
+│  第 0 步：連線測試（必做）                         │
+│  → 測試 Amazon 能否連到 Ollama 和 RAGFlow         │
+├──────────────────────────────────────────────────┤
 │  第 1 步：準備檔案                                 │
 │  ✓ 我已經幫你建立了 Dockerfile                     │
 │  ✓ 我已經幫你建立了 docker-compose.yml            │
