@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # Next.js + Python Agent Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent-test-app
+    ports:
+      - "3000:3000"
+    environment:
+      # Node.js Environment
+      - NODE_ENV=production
+      
+      # OpenAI Configuration (必須設置)
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL_NAME=${OPENAI_MODEL_NAME}
+      
+      # RAGFlow Configuration (必須設置)
+      - RAGFLOW_BASE_URL=${RAGFLOW_BASE_URL}
+      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
+      - RAGFLOW_KB_ID=${RAGFLOW_KB_ID}
+      
+      # Ollama Configuration (必須設置)
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      
+      # Python Path
+      - PYTHON_PATH=/usr/bin/python3
+      
+      # NextAuth Configuration
+      - AUTH_SECRET=${AUTH_SECRET:-your-secret-key-change-this}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - AUTH_TRUST_HOST=true
+      
+      # Database (Optional - for guest mode, can be empty)
+      - POSTGRES_URL=${POSTGRES_URL:-}
+    volumes:
+      # Persist uploaded files
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    networks:
+      - agent-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Ollama Service (Optional - if you want to run Ollama locally)
+  # Uncomment if you don't have external Ollama service
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   restart: unless-stopped
+  #   networks:
+  #     - agent-network
+
+networks:
+  agent-network:
+    driver: bridge
+
+volumes:
+  ollama-data:
