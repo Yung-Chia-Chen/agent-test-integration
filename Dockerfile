@@ -108,8 +108,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 # Copy Python backend
 COPY --chown=nextjs:nodejs python-backend/ ./python-backend/
 
-# Create uploads directory
-RUN mkdir -p uploads/products && chown -R nextjs:nodejs uploads
+# Copy entrypoint script
+COPY --chown=nextjs:nodejs docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Create uploads directory with correct permissions
+RUN mkdir -p uploads/products && \
+    chown -R nextjs:nodejs uploads && \
+    chmod -R 755 uploads
 
 USER nextjs
 
@@ -122,4 +128,4 @@ ENV HOSTNAME="0.0.0.0"
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD node -e "require('http').get('http://0.0.0.0:3000/', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
-CMD ["node", "server.js"]
+CMD ["/app/docker-entrypoint.sh"]

@@ -37,8 +37,8 @@ services:
       # Database (Optional - for guest mode, can be empty)
       - POSTGRES_URL=${POSTGRES_URL:-}
     volumes:
-      # Persist uploaded files
-      - ./uploads:/app/uploads
+      # Persist uploaded files using named volume (better for Docker)
+      - uploads-data:/app/uploads
     restart: unless-stopped
     networks:
       - agent-network
@@ -67,4 +67,5 @@ networks:
     driver: bridge
 
 volumes:
+  uploads-data:
   ollama-data:
