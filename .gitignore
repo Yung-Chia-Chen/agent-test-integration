@@ -26,8 +26,11 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Local env files (不要提交敏感資訊！)
-.env.local
 .env
+.env.local
+.env.production
+.env.*.local
+*.env
 
 # Python
 __pycache__/
