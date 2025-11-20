@@ -12,6 +12,7 @@ import time
 from functools import wraps
 from openai import AsyncOpenAI
 from litellm import completion
+from sentence_transformers import CrossEncoder
 from agents import (
     Agent,
     Model,
@@ -64,7 +65,13 @@ MODEL_NAME = os.getenv("OPENAI_MODEL_NAME")
 RAGFLOW_BASE_URL = os.getenv("RAGFLOW_BASE_URL")
 RAGFLOW_API_KEY = os.getenv("RAGFLOW_API_KEY")
 RAGFLOW_KB_ID = os.getenv("RAGFLOW_KB_ID")
+RAGFLOW_TOP_K = int(os.getenv("RAGFLOW_TOP_K", "200"))  # RAGFlow 初始檢索數量
+RAGFLOW_SIMILARITY_THRESHOLD = float(os.getenv("RAGFLOW_SIMILARITY_THRESHOLD", "0.1"))  # 相似度閾值
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen3-vl:235b-cloud")  # 預設視覺模型
+USE_RERANK = os.getenv("USE_RERANK", "true").lower() == "true"  # 是否使用 rerank
+RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")  # Rerank 模型
+RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "5"))  # Rerank 後保留的結果數量
 
 # 檢查必要的環境變數
 if not all([BASE_URL, API_KEY, MODEL_NAME]):
@@ -102,6 +109,60 @@ RAGFLOW_HEADERS = {
     'Content-Type': 'application/json',
     'Authorization': f'Bearer {RAGFLOW_API_KEY}'
 }
+
+# Rerank 模型（延遲載入）
+_rerank_model = None
+
+def get_rerank_model():
+    """延遲載入 rerank 模型"""
+    global _rerank_model
+    if _rerank_model is None and USE_RERANK:
+        try:
+            emit_event("info", message=f"正在載入 Rerank 模型: {RERANK_MODEL}...")
+            _rerank_model = CrossEncoder(RERANK_MODEL, max_length=512)
+            emit_event("info", message="Rerank 模型載入完成")
+        except Exception as e:
+            emit_event("warning", message=f"Rerank 模型載入失敗: {str(e)}，將使用原始排序")
+            return None
+    return _rerank_model
+
+def rerank_results(query: str, chunks: list) -> list:
+    """使用 CrossEncoder 重新排序檢索結果
+    
+    Args:
+        query: 用戶查詢
+        chunks: RAGFlow 返回的文檔片段列表
+    
+    Returns:
+        重新排序後的文檔片段列表
+    """
+    if not USE_RERANK or not chunks:
+        return chunks
+    
+    model = get_rerank_model()
+    if model is None:
+        return chunks
+    
+    try:
+        # 準備 (query, document) 對
+        pairs = [(query, chunk.get('content', '')) for chunk in chunks]
+        
+        # 計算相關性分數
+        scores = model.predict(pairs)
+        
+        # 將分數添加到每個 chunk
+        for i, chunk in enumerate(chunks):
+            chunk['rerank_score'] = float(scores[i])
+        
+        # 按 rerank 分數排序
+        reranked = sorted(chunks, key=lambda x: x.get('rerank_score', 0), reverse=True)
+        
+        # 只保留 top-k
+        return reranked[:RERANK_TOP_K]
+        
+    except Exception as e:
+        emit_event("warning", message=f"Rerank 處理失敗: {str(e)}，使用原始排序")
+        return chunks
 
 # ============ 翻譯功能 ============
 
@@ -271,28 +332,39 @@ async def extract_product_model(image_path: str) -> str:
         with open(image_path, "rb") as image_file:
             image_base64 = base64.b64encode(image_file.read()).decode('utf-8')
         
-        image_url = f"data:image/jpeg;base64,{image_base64}"
-        
         # OCR 提示詞
         prompt = """請仔細觀察這張產品標籤圖片，找出TYPE欄位的型號資訊。
 請只回傳TYPE對應的型號，例如：如果看到TYPE GLM40，請回傳：GLM40
 如果找不到TYPE欄位，請回傳：未找到型號"""
         
-        # 調用 Ollama 視覺模型
-        response = completion(
-            model="ollama/qwen2.5vl:7b",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}}
-                ]
-            }],
-            api_base=f"http://{OLLAMA_HOST}",
-            stream=False
+        # 調用 Ollama 視覺模型 (使用原生 Ollama API)
+        ollama_payload = {
+            "model": OLLAMA_VISION_MODEL,
+            "prompt": prompt,
+            "images": [image_base64],
+            "stream": False
+        }
+        
+        ollama_response = await asyncio.to_thread(
+            requests.post,
+            f"https://{OLLAMA_HOST}/api/generate",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=ollama_payload,
+            timeout=60
         )
         
-        extracted_text = response.choices[0].message.content
+        if ollama_response.status_code != 200:
+            result = f"Ollama API 錯誤: {ollama_response.status_code} - {ollama_response.text}"
+            emit_event("tool_call_error", 
+                      tool_name="extract_product_model", 
+                      message=f"extract_product_model 調用失敗: {result}")
+            return result
+        
+        response_data = ollama_response.json()
+        extracted_text = response_data.get("response", "")
         detected_model = extract_type_model(extracted_text)
         mapped_model = map_model_number(detected_model)
         
@@ -345,9 +417,10 @@ async def retrieve_product_knowledge(query: str) -> str:
         search_data = {
             "question": query,
             "dataset_ids": [RAGFLOW_KB_ID],
-            "top_k": 128,
-            "similarity_threshold": 0.25,
-            "vector_similarity_weight": 0.6,
+            "top_k": RAGFLOW_TOP_K,  # 從環境變數讀取
+            "similarity_threshold": RAGFLOW_SIMILARITY_THRESHOLD,  # 從環境變數讀取
+            "vector_similarity_weight": 0.5,  # 平衡向量和關鍵字搜尋
+            "page_size": 50,
             "keyword": True,
             "highlight": True
         }
@@ -364,12 +437,22 @@ async def retrieve_product_knowledge(query: str) -> str:
             data = response.json()
             if data and data.get('code') == 0:
                 chunks = data.get('data', {}).get('chunks', [])
+                emit_event("info", message=f"RAGFlow 返回 {len(chunks)} 個結果")
                 
-                # 基本過濾：只保留相似度較高的前 5 個結果以減少處理時間
+                # 基本過濾：使用環境變數配置的閾值
                 filtered_chunks = [
                     chunk for chunk in chunks 
-                    if chunk.get('similarity', 0) >= 0.25
-                ][:5]
+                    if chunk.get('similarity', 0) >= RAGFLOW_SIMILARITY_THRESHOLD
+                ]
+                
+                # 使用 rerank 重新排序
+                if USE_RERANK and len(filtered_chunks) > 0:
+                    emit_event("info", message=f"正在使用 Rerank 重新排序 {len( filtered_chunks)} 個結果...")
+                    filtered_chunks = rerank_results(query, filtered_chunks)
+                    emit_event("info", message=f"Rerank 完成，保留前 {len(filtered_chunks)} 個最相關結果")
+                else:
+                    # 不使用 rerank，只取前 5 個
+                    filtered_chunks = filtered_chunks[:5]
                 
                 if filtered_chunks:
                     results = []
@@ -380,10 +463,13 @@ async def retrieve_product_knowledge(query: str) -> str:
                         content = chunk.get('content', '').strip()
                         doc_name = chunk.get('document_keyword', chunk.get('document_name', f'Document{i}'))
                         similarity = chunk.get('similarity', 0)
+                        rerank_score = chunk.get('rerank_score')
                         
                         results.append(f"【資料 {i}】")
                         results.append(f"來源：{doc_name}")
-                        results.append(f"相似度：{similarity:.3f}")
+                        results.append(f"向量相似度：{similarity:.3f}")
+                        if rerank_score is not None:
+                            results.append(f"Rerank 分數：{rerank_score:.3f}")
                         results.append(f"內容：\n{content}")
                         results.append("-" * 50)
                     

@@ -84,7 +84,9 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     aiohttp \
     pydantic \
     typing-extensions \
-    Pillow
+    Pillow \
+    sentence-transformers \
+    torch
 
 # Install agents package (may have different dependencies)
 # Already installed as openai-agents above

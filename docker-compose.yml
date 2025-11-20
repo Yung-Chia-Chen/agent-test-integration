@@ -22,9 +22,17 @@ services:
       - RAGFLOW_BASE_URL=${RAGFLOW_BASE_URL}
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
       - RAGFLOW_KB_ID=${RAGFLOW_KB_ID}
+      - RAGFLOW_TOP_K=${RAGFLOW_TOP_K:-200}
+      - RAGFLOW_SIMILARITY_THRESHOLD=${RAGFLOW_SIMILARITY_THRESHOLD:-0.1}
+      
+      # Rerank 增強檢索配置
+      - USE_RERANK=${USE_RERANK:-true}
+      - RERANK_MODEL=${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      - RERANK_TOP_K=${RERANK_TOP_K:-5}
       
       # Ollama Configuration (必須設置)
       - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-qwen3-vl:235b-cloud}
       
       # Python Path
       - PYTHON_PATH=/usr/bin/python3
